@@ -44,6 +44,7 @@ var (
 	serverHostname = flag.String("server-hostname", "", "The hostname for the NFS server to export from. Only applicable when running out-of-cluster i.e. it can only be set if either master or kubeconfig are set. If unset, the first IP output by `hostname -i` is used.")
 	exportSubnet   = flag.String("export-subnet", "*", "Subnet for NFS export to allow mount only from")
 	maxExports     = flag.Int("max-exports", -1, "The maximum number of volumes to be exported by this provisioner. New claims will be ignored once this limit has been reached. A negative value is interpreted as 'unlimited'. Default -1.")
+	vgName         = flag.String("vg-name", "", "The name of the lvm volume group (if set a new logical volume will be created for every pv)")
 )
 
 const (
@@ -129,7 +130,7 @@ func main() {
 
 	// Create the provisioner: it implements the Provisioner interface expected by
 	// the controller
-	nfsProvisioner := vol.NewNFSProvisioner(exportDir, clientset, outOfCluster, *useGanesha, ganeshaConfig, *enableXfsQuota, *serverHostname, *maxExports, *exportSubnet)
+	nfsProvisioner := vol.NewNFSProvisioner(exportDir, *vgName, clientset, outOfCluster, *useGanesha, ganeshaConfig, *enableXfsQuota, *serverHostname, *maxExports, *exportSubnet)
 
 	// Start the provision controller which will dynamically provision NFS PVs
 	pc := controller.NewProvisionController(

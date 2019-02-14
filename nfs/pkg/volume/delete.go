@@ -19,11 +19,12 @@ package volume
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path"
 	"strconv"
 
 	"github.com/kubernetes-sigs/sig-storage-lib-external-provisioner/controller"
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 )
 
 // Delete removes the directory that was created by Provision backing the given
@@ -41,14 +42,21 @@ func (p *nfsProvisioner) Delete(volume *v1.PersistentVolume) error {
 		return &controller.IgnoredError{Reason: strerr}
 	}
 
+	err = p.deleteExport(volume)
+	if err != nil {
+		return fmt.Errorf("error deleting export: %v", err)
+	}
+
+	if p.vgName != "" {
+		err = p.deleteLvmVolume(volume)
+		if err != nil {
+			return fmt.Errorf("error deleting volume's lv: %v", err)
+		}
+	}
+
 	err = p.deleteDirectory(volume)
 	if err != nil {
 		return fmt.Errorf("error deleting volume's backing path: %v", err)
-	}
-
-	err = p.deleteExport(volume)
-	if err != nil {
-		return fmt.Errorf("deleted the volume's backing path but error deleting export: %v", err)
 	}
 
 	err = p.deleteQuota(volume)
@@ -66,6 +74,26 @@ func (p *nfsProvisioner) provisioned(volume *v1.PersistentVolume) (bool, error) 
 	}
 
 	return provisionerID == string(p.identity), nil
+}
+
+func (p *nfsProvisioner) deleteLvmVolume(volume *v1.PersistentVolume) error {
+	pvName := volume.ObjectMeta.Name
+	devicePath := "/dev/" + p.vgName + "/" + pvName
+	path := path.Join(p.exportDir, pvName)
+
+	err := p.mounter.RemoveMount(devicePath, path, "xfs")
+	if err != nil {
+		return fmt.Errorf("mounter failed with error: %v", err)
+	}
+
+	cmd := exec.Command("lvremove", devicePath, "-f")
+	log(cmd)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("lvremove failed with error: %v, output: %s", err, out)
+	}
+
+	return nil
 }
 
 func (p *nfsProvisioner) deleteDirectory(volume *v1.PersistentVolume) error {

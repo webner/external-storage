@@ -29,7 +29,7 @@ import (
 
 	"github.com/golang/glog"
 	"github.com/kubernetes-sigs/sig-storage-lib-external-provisioner/controller"
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -78,7 +78,7 @@ const (
 
 // NewNFSProvisioner creates a Provisioner that provisions NFS PVs backed by
 // the given directory.
-func NewNFSProvisioner(exportDir string, client kubernetes.Interface, outOfCluster bool, useGanesha bool, ganeshaConfig string, enableXfsQuota bool, serverHostname string, maxExports int, exportSubnet string) controller.Provisioner {
+func NewNFSProvisioner(exportDir, vgName string, client kubernetes.Interface, outOfCluster bool, useGanesha bool, ganeshaConfig string, enableXfsQuota bool, serverHostname string, maxExports int, exportSubnet string) controller.Provisioner {
 	var exp exporter
 	if useGanesha {
 		exp = newGaneshaExporter(ganeshaConfig)
@@ -95,10 +95,10 @@ func NewNFSProvisioner(exportDir string, client kubernetes.Interface, outOfClust
 	} else {
 		quotaer = newDummyQuotaer()
 	}
-	return newNFSProvisionerInternal(exportDir, client, outOfCluster, exp, quotaer, serverHostname, maxExports, exportSubnet)
+	return newNFSProvisionerInternal(exportDir, vgName, client, outOfCluster, exp, quotaer, serverHostname, maxExports, exportSubnet)
 }
 
-func newNFSProvisionerInternal(exportDir string, client kubernetes.Interface, outOfCluster bool, exporter exporter, quotaer quotaer, serverHostname string, maxExports int, exportSubnet string) *nfsProvisioner {
+func newNFSProvisionerInternal(exportDir string, vgName string, client kubernetes.Interface, outOfCluster bool, exporter exporter, quotaer quotaer, serverHostname string, maxExports int, exportSubnet string) *nfsProvisioner {
 	if _, err := os.Stat(exportDir); os.IsNotExist(err) {
 		glog.Fatalf("exportDir %s does not exist!", exportDir)
 	}
@@ -121,6 +121,7 @@ func newNFSProvisionerInternal(exportDir string, client kubernetes.Interface, ou
 
 	provisioner := &nfsProvisioner{
 		exportDir:      exportDir,
+		vgName:         vgName,
 		client:         client,
 		outOfCluster:   outOfCluster,
 		exporter:       exporter,
@@ -133,6 +134,7 @@ func newNFSProvisionerInternal(exportDir string, client kubernetes.Interface, ou
 		serviceEnv:     serviceEnv,
 		namespaceEnv:   namespaceEnv,
 		nodeEnv:        nodeEnv,
+		mounter:        newFstabMounter(),
 	}
 
 	return provisioner
@@ -141,6 +143,9 @@ func newNFSProvisionerInternal(exportDir string, client kubernetes.Interface, ou
 type nfsProvisioner struct {
 	// The directory to create PV-backing directories in
 	exportDir string
+
+	// The name of the lvm volume group
+	vgName string
 
 	// Client, needed for getting a service cluster IP to put as the NFS server of
 	// provisioned PVs
@@ -152,6 +157,9 @@ type nfsProvisioner struct {
 
 	// The exporter to use for exporting NFS shares
 	exporter exporter
+
+	// The mounter to use for mounting lvm volumes
+	mounter mounter
 
 	// The quotaer to use for setting per-share/directory/project quotas
 	quotaer quotaer
@@ -280,6 +288,14 @@ func (p *nfsProvisioner) createVolume(options controller.VolumeOptions) (volume,
 		return volume{}, fmt.Errorf("error creating directory for volume: %v", err)
 	}
 
+	if p.vgName != "" {
+		err = p.createLvmVolume(options.PVName, gid, options.PVC.Spec.Resources.Requests[v1.ResourceName(v1.ResourceStorage)])
+		if err != nil {
+			os.RemoveAll(path)
+			return volume{}, fmt.Errorf("error creating lv for volume: %v", err)
+		}
+	}
+
 	exportBlock, exportID, err := p.createExport(options.PVName, rootSquash)
 	if err != nil {
 		os.RemoveAll(path)
@@ -338,13 +354,35 @@ func (p *nfsProvisioner) validateOptions(options controller.VolumeOptions) (stri
 		return "", false, "", fmt.Errorf("claim.Spec.Selector is not supported")
 	}
 
-	var stat syscall.Statfs_t
-	if err := syscall.Statfs(p.exportDir, &stat); err != nil {
-		return "", false, "", fmt.Errorf("error calling statfs on %v: %v", p.exportDir, err)
-	}
 	capacity := options.PVC.Spec.Resources.Requests[v1.ResourceName(v1.ResourceStorage)]
 	requestBytes := capacity.Value()
-	available := int64(stat.Bavail) * int64(stat.Bsize)
+
+	var available int64
+
+	if p.vgName != "" {
+		if requestBytes%512 != 0 {
+			requestBytes = requestBytes + (512 - requestBytes%512)
+		}
+		cmd := exec.Command("vgs", "--noheadings", "--units", "b", "--nosuffix", "-o", "-vg_all", "-o", "vg_free", p.vgName)
+		log(cmd)
+		out, err := cmd.Output()
+		if err != nil {
+			return "", false, "", fmt.Errorf("vgs failed with error: %v, output: %s", err, out)
+		}
+
+		available, err = strconv.ParseInt(strings.TrimSpace(string(out)), 10, 64)
+		if err != nil {
+			return "", false, "", fmt.Errorf("strconv failed with error: %v, output: %s", err, out)
+		}
+
+	} else {
+		var stat syscall.Statfs_t
+		if err := syscall.Statfs(p.exportDir, &stat); err != nil {
+			return "", false, "", fmt.Errorf("error calling statfs on %v: %v", p.exportDir, err)
+		}
+		available = int64(stat.Bavail) * int64(stat.Bsize)
+	}
+
 	if requestBytes > available {
 		return "", false, "", fmt.Errorf("insufficient available space %v bytes to satisfy claim for %v bytes", available, requestBytes)
 	}
@@ -442,6 +480,62 @@ func (p *nfsProvisioner) getServer() (string, error) {
 
 func (p *nfsProvisioner) checkExportLimit() bool {
 	return p.exporter.CanExport(p.maxExports)
+}
+
+func (p *nfsProvisioner) createLvmVolume(directory, gid string, capacity resource.Quantity) error {
+	path := path.Join(p.exportDir, directory)
+
+	requestBytes := capacity.Value()
+	if requestBytes%512 != 0 {
+		requestBytes = requestBytes + (512 - requestBytes%512)
+	}
+	lvsize := strconv.FormatInt(requestBytes, 10)
+
+	cmd := exec.Command("lvcreate", "--size", lvsize+"b", "-n", directory, p.vgName)
+	log(cmd)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("lvcreate failed with error: %v, output: %s", err, out)
+	}
+
+	cmd = exec.Command("mkfs.xfs", "/dev/"+p.vgName+"/"+directory)
+	log(cmd)
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("mkfs.xfs failed with error: %v, output: %s", err, out)
+	}
+
+	err = p.mounter.AddMount("/dev/"+p.vgName+"/"+directory, path, "xfs")
+	if err != nil {
+		return fmt.Errorf("mounter failed with error: %v", err)
+	}
+
+	perm := os.FileMode(0777 | os.ModeSetgid)
+	if gid != "none" {
+		// Execute permission is required for stat, which kubelet uses during unmount.
+		perm = os.FileMode(0071 | os.ModeSetgid)
+	}
+	// Due to umask, need to chmod
+	if err := os.Chmod(path, perm); err != nil {
+		os.RemoveAll(path)
+		return err
+	}
+
+	if gid != "none" {
+		groupID, err := strconv.ParseUint(gid, 10, 64)
+		if err != nil {
+			os.RemoveAll(path)
+			return fmt.Errorf("strconv.ParseUint failed with error: %v", err)
+		}
+		cmd := exec.Command("chgrp", strconv.FormatUint(groupID, 10), path)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			os.RemoveAll(path)
+			return fmt.Errorf("chgrp failed with error: %v, output: %s", err, out)
+		}
+	}
+
+	return nil
 }
 
 // createDirectory creates the given directory in exportDir with appropriate

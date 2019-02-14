@@ -21,10 +21,13 @@ import (
 	"io/ioutil"
 	"math"
 	"os"
+	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/golang/glog"
 )
 
 // generateID generates a unique exportID to assign an export
@@ -111,4 +114,8 @@ func removeFromFile(mutex *sync.Mutex, path string, toRemove string) error {
 
 	mutex.Unlock()
 	return nil
+}
+
+func log(cmd *exec.Cmd) {
+	glog.Infof("calling %s", strings.Join(cmd.Args, " "))
 }
