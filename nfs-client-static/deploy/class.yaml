@@ -1,0 +1,18 @@
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: grasp-cloud-archive
+provisioner: nfs-client-static-provisioner
+parameters:
+  server: "nfs01.iaas.catalysts.cloud"
+  path: "/grasp-cloud/archive"
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: grasp-cloud-scratch
+provisioner: nfs-client-static-provisioner
+parameters:
+  server: "nfs01.iaas.catalysts.cloud"
+  path: "/grasp-cloud/scratch"
