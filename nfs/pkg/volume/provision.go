@@ -78,7 +78,7 @@ const (
 
 // NewNFSProvisioner creates a Provisioner that provisions NFS PVs backed by
 // the given directory.
-func NewNFSProvisioner(exportDir, vgName string, client kubernetes.Interface, outOfCluster bool, useGanesha bool, ganeshaConfig string, enableXfsQuota bool, serverHostname string, maxExports int, exportSubnet string) controller.Provisioner {
+func NewNFSProvisioner(exportDir, vgName string, thinpool string, client kubernetes.Interface, outOfCluster bool, useGanesha bool, ganeshaConfig string, enableXfsQuota bool, serverHostname string, maxExports int, exportSubnet string) controller.Provisioner {
 	var exp exporter
 	if useGanesha {
 		exp = newGaneshaExporter(ganeshaConfig)
@@ -95,10 +95,10 @@ func NewNFSProvisioner(exportDir, vgName string, client kubernetes.Interface, ou
 	} else {
 		quotaer = newDummyQuotaer()
 	}
-	return newNFSProvisionerInternal(exportDir, vgName, client, outOfCluster, exp, quotaer, serverHostname, maxExports, exportSubnet)
+	return newNFSProvisionerInternal(exportDir, vgName, thinpool, client, outOfCluster, exp, quotaer, serverHostname, maxExports, exportSubnet)
 }
 
-func newNFSProvisionerInternal(exportDir string, vgName string, client kubernetes.Interface, outOfCluster bool, exporter exporter, quotaer quotaer, serverHostname string, maxExports int, exportSubnet string) *nfsProvisioner {
+func newNFSProvisionerInternal(exportDir string, vgName string, thinpool string, client kubernetes.Interface, outOfCluster bool, exporter exporter, quotaer quotaer, serverHostname string, maxExports int, exportSubnet string) *nfsProvisioner {
 	if _, err := os.Stat(exportDir); os.IsNotExist(err) {
 		glog.Fatalf("exportDir %s does not exist!", exportDir)
 	}
@@ -122,6 +122,7 @@ func newNFSProvisionerInternal(exportDir string, vgName string, client kubernete
 	provisioner := &nfsProvisioner{
 		exportDir:      exportDir,
 		vgName:         vgName,
+		thinpool:       thinpool,
 		client:         client,
 		outOfCluster:   outOfCluster,
 		exporter:       exporter,
@@ -146,6 +147,9 @@ type nfsProvisioner struct {
 
 	// The name of the lvm volume group
 	vgName string
+
+	// The name of the thin pool lvm
+	thinpool string
 
 	// Client, needed for getting a service cluster IP to put as the NFS server of
 	// provisioned PVs
@@ -491,7 +495,11 @@ func (p *nfsProvisioner) createLvmVolume(directory, gid string, capacity resourc
 	}
 	lvsize := strconv.FormatInt(requestBytes, 10)
 
-	cmd := exec.Command("lvcreate", "--size", lvsize+"b", "-n", directory, p.vgName)
+	cmd := exec.Command("lvcreate", "-Wy", "-Zy", "--yes", "--size", lvsize+"b", "-n", directory, p.vgName)
+
+	if p.thinpool != "" {
+		cmd = exec.Command("lvcreate", "-Wy", "--yes", "-V", lvsize+"b", "--thin", "-n", directory, p.vgName+"/"+p.thinpool)
+	}
 	log(cmd)
 	out, err := cmd.CombinedOutput()
 	if err != nil {

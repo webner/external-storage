@@ -1,0 +1,17 @@
+[Unit]
+Description=nfs-provisioner
+
+[Service]
+Restart=always
+RestartSec=5s
+
+ExecStart=/usr/local/bin/nfs-provisioner \
+            -run-server=false \
+            -use-ganesha=false \
+            -kubeconfig /home/centos/.kube/config \
+            -server-hostname nfs01.iaas.catalysts.cloud \
+            -vg-name nfsdata \
+            -provisioner catalysts.cc/nfs
+
+[Install]
+WantedBy=multi-user.target
