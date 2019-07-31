@@ -46,10 +46,10 @@ var (
 	maxExports     = flag.Int("max-exports", -1, "The maximum number of volumes to be exported by this provisioner. New claims will be ignored once this limit has been reached. A negative value is interpreted as 'unlimited'. Default -1.")
 	vgName         = flag.String("vg-name", "", "The name of the lvm volume group (if set a new logical volume will be created for every pv)")
 	thinpool       = flag.String("thinpool", "", "If set it will create thin LVM volumes.")
+	exportDir      = flag.String("export-dir", "/export", "The root folder of the exports.")
 )
 
 const (
-	exportDir     = "/export"
 	ganeshaLog    = "/export/ganesha.log"
 	ganeshaPid    = "/var/run/ganesha.pid"
 	ganeshaConfig = "/export/vfs.conf"
@@ -131,7 +131,7 @@ func main() {
 
 	// Create the provisioner: it implements the Provisioner interface expected by
 	// the controller
-	nfsProvisioner := vol.NewNFSProvisioner(exportDir, *vgName, *thinpool, clientset, outOfCluster, *useGanesha, ganeshaConfig, *enableXfsQuota, *serverHostname, *maxExports, *exportSubnet)
+	nfsProvisioner := vol.NewNFSProvisioner(*exportDir, *vgName, *thinpool, clientset, outOfCluster, *useGanesha, ganeshaConfig, *enableXfsQuota, *serverHostname, *maxExports, *exportSubnet)
 
 	// Start the provision controller which will dynamically provision NFS PVs
 	pc := controller.NewProvisionController(
