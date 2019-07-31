@@ -368,6 +368,10 @@ func (p *nfsProvisioner) validateOptions(options controller.VolumeOptions) (stri
 			requestBytes = requestBytes + (512 - requestBytes%512)
 		}
 		cmd := exec.Command("vgs", "--noheadings", "--units", "b", "--nosuffix", "-o", "-vg_all", "-o", "vg_free", p.vgName)
+
+		if p.thinpool != "" {
+			cmd = exec.Command("tp-free", p.vgName, p.thinpool)
+		}
 		log(cmd)
 		out, err := cmd.Output()
 		if err != nil {
