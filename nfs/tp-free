@@ -1,0 +1,2 @@
+#!/bin/bash
+lvs --noheadings --units b --nosuffix -o lv_size,data_percent $1/$2|perl -pe 's/\s*([0-9.]+)([a-zA-Z]*)\s+([0-9.]+).*/sprintf("%.0f%s", ($1 * (100 - $3) \/ 100.0), $2)/e'
