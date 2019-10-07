@@ -510,7 +510,7 @@ func (p *nfsProvisioner) createLvmVolume(directory, gid string, capacity resourc
 		return fmt.Errorf("lvcreate failed with error: %v, output: %s", err, out)
 	}
 
-	cmd = exec.Command("mkfs.xfs", "/dev/"+p.vgName+"/"+directory)
+	cmd = exec.Command("mkfs.xfs", "-f", "/dev/"+p.vgName+"/"+directory)
 	log(cmd)
 	out, err = cmd.CombinedOutput()
 	if err != nil {
