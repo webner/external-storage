@@ -25,8 +25,8 @@ import (
 	"sync"
 
 	"github.com/golang/glog"
-	"github.com/guelfey/go.dbus"
-	"k8s.io/api/core/v1"
+	dbus "github.com/guelfey/go.dbus"
+	v1 "k8s.io/api/core/v1"
 )
 
 type exporter interface {
@@ -102,7 +102,10 @@ func (e *genericExporter) AddExportBlock(path string, rootSquash bool, exportSub
 }
 
 func (e *genericExporter) RemoveExportBlock(block string, exportID uint16) error {
-	deleteID(e.mapMutex, e.exportIDs, exportID)
+	// disable fsid reuse
+	// this function can be called multiple times for the same persistent volume when there is an error
+	// if that happens and the fsid is already used for another persistent volume, this will lead to multiple usages of the same fsid
+	// deleteID(e.mapMutex, e.exportIDs, exportID)
 	return removeFromFile(e.fileMutex, e.config, block)
 }
 
